@@ -136,7 +136,6 @@ class ReferenceCurve:
         return self.estimation_func(day_offset)
 
 
-
 @cli.command()
 def show_reference_curve():
     '''
@@ -165,7 +164,11 @@ def show_map():
     '''
     Show a map of the US with T-XXX (to N cases) shown on the states.
     '''
-    # Unpack the geo data into a temp file.
+    # Load the dataset.
+    with open(DATA_FILENAME, 'rb') as f:
+        data: pd.DataFrame = pickle.load(f)
+
+    # Load the geo data.
     with tempfile.TemporaryDirectory() as tempdir:
         with zipfile.ZipFile(GEO_DATA_FILENAME) as geo_files:
             geo_files.extractall(tempdir)
@@ -173,8 +176,27 @@ def show_map():
         usa = gpd.read_file(path.join(tempdir, 'states.shp'))
         usa = usa[~usa.STATE_ABBR.isin(['AK', 'HI'])]
 
-        usa.plot()
-        plt.show()
+
+    # Restrict to US data, and confirmed cases only.
+    data = data[data['Country/Region'].isin(['US'])]
+
+    # Draw the whole map.
+    usa.plot()
+
+    # Draw stuff on each state.
+    for _, state_geo in usa.iterrows():
+        # Get confirmed cases by day
+        state_data = data[data['Province/State'] == state_geo.STATE_NAME]
+        state_data = state_data[['Confirmed', FILE_DATE_KEY]].sort_values(by=[FILE_DATE_KEY])
+        state_data = state_data.groupby(FILE_DATE_KEY).sum()
+        state_data.reset_index(level=0, inplace=True) # Convert the index (of the date) to a column.
+
+        cur_cases = int(state_data.iloc[-1]['Confirmed'])
+
+        pt = state_geo.geometry.representative_point()
+        plt.text(pt.x, pt.y, f'{state_geo.STATE_ABBR}: {cur_cases}', horizontalalignment='center', color='w')
+
+    plt.show()
 
 
 
