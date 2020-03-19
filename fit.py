@@ -11,6 +11,7 @@ import zipfile
 
 import click
 import geopandas as gpd
+import matplotlib.patheffects as PathEffects
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -135,6 +136,24 @@ class ReferenceCurve:
         '''
         return self.estimation_func(day_offset)
 
+    def cases_to_day(self, cases: float) -> float:
+        '''
+        Do the inverse mapping - map a number of cases to a day.
+
+        Args:
+            cases: The number of cases.
+
+        Return:
+            The estimated day. If the function were perfectly accurate, then for example
+            if `cases` == the number of cases on the last day of the dataset, this would
+            return the number of the last day.
+        '''
+        inverted = (cases / self.scale)
+        inverted = np.log(inverted)
+        inverted = (inverted - self.model[1]) / self.model[0]
+        return inverted
+
+
 
 @cli.command()
 def show_reference_curve():
@@ -160,13 +179,19 @@ def show_reference_curve():
 
 
 @cli.command()
-def show_map():
+@click.option('--target_cases', default=20000, type=float,
+              help='The number of cases to calculate # of days until.',
+              show_default=True)
+def show_map(target_cases: float):
     '''
     Show a map of the US with T-XXX (to N cases) shown on the states.
     '''
     # Load the dataset.
     with open(DATA_FILENAME, 'rb') as f:
         data: pd.DataFrame = pickle.load(f)
+
+    # Setup the reference curve.
+    curve = ReferenceCurve(data)
 
     # Load the geo data.
     with tempfile.TemporaryDirectory() as tempdir:
@@ -191,11 +216,19 @@ def show_map():
         state_data = state_data.groupby(FILE_DATE_KEY).sum()
         state_data.reset_index(level=0, inplace=True) # Convert the index (of the date) to a column.
 
+        #import pudb;pudb.set_trace()
         cur_cases = int(state_data.iloc[-1]['Confirmed'])
 
-        pt = state_geo.geometry.representative_point()
-        plt.text(pt.x, pt.y, f'{state_geo.STATE_ABBR}: {cur_cases}', horizontalalignment='center', color='w')
+        estimated_cur_day = int(curve.cases_to_day(cur_cases))
+        estimated_target_cases_day = int(curve.cases_to_day(target_cases))
+        days_until = estimated_target_cases_day - estimated_cur_day
 
+        pt = state_geo.geometry.representative_point()
+        txt = plt.text(pt.x, pt.y, f'{state_geo.STATE_ABBR}\ncases: {cur_cases}\ndays until: {days_until}', horizontalalignment='center', color='w')
+        txt.set_path_effects([PathEffects.withStroke(linewidth=2, foreground='black')])
+
+
+    plt.title(f'Days until {int(target_cases)} cases')
     plt.show()
 
 
