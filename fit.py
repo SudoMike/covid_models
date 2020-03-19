@@ -11,6 +11,7 @@ import zipfile
 
 import click
 import geopandas as gpd
+from matplotlib.colors import ListedColormap
 import matplotlib.patheffects as PathEffects
 import matplotlib.pyplot as plt
 import numpy as np
@@ -270,14 +271,20 @@ def show_map(target_cases: float):
         state_to_data[state_geo.STATE_NAME] = state_data
         state_to_days_until[state_geo.STATE_NAME] = estimated_target_cases_day - estimated_cur_day
 
+    # Set the 'days_until' column.
+    usa['days_until'] = usa['STATE_NAME'].map(lambda x: state_to_days_until[x])
+
+    def remap01(x, start, end):
+        return start + (end - start) * x
 
     # Draw the whole map.
-    usa.plot()
+    cmap = plt.get_cmap('jet')
+    cmap = [cmap(int(remap01(x, 0, 1))) for x in range(256)]
+    cmap_reversed = ListedColormap(cmap[::-1])
+    usa.plot(column='days_until', cmap=cmap_reversed, edgecolor='black')
 
     days_until_min = min(state_to_days_until.values())
     days_until_max = max(state_to_days_until.values())
-
-    cmap = plt.get_cmap('jet') # 0-255 maps to red->orange
 
     # Draw stuff on each state.
     for _, state_geo in usa.iterrows():
@@ -288,16 +295,18 @@ def show_map(target_cases: float):
 
         # Figure out a text color.
         t = (days_until - days_until_min) / (days_until_max - days_until_min)
-        color = cmap(255 - int(t * 255))
+        color = cmap_reversed(int(t * 255))
+
+        #x = usa[usa.STATE_NAME == state_geo.STATE_NAME]
+        #x.plot()
 
         pt = state_geo.geometry.representative_point()
         txt = plt.text(
             pt.x,
             pt.y,
-            f'{state_geo.STATE_ABBR}\ncases: {cur_cases}\nT-{days_until} days',
+            f'{state_geo.STATE_ABBR}\nT-{days_until} days',
             horizontalalignment='center',
-            color=color,
-            weight='bold')
+            color='white')
         txt.set_path_effects([PathEffects.withStroke(linewidth=2, foreground='black')])
 
     highest_date = data[FILE_DATE_KEY].max()
