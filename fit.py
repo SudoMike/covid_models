@@ -48,11 +48,12 @@ def fetch():
     return
 
     print('Pulling all the CSVs..')
-    cur_date = date(2020, 1, 22)
+    start_date = date(2020, 1, 22)
     today = datetime.now().date()
     
     data: Optional[pd.DataFrame] = None
 
+    cur_date = start_date
     while cur_date <= today:
         date_str = f'{cur_date.month:02}-{cur_date.day:02}-{cur_date.year}'
         sys.stdout.write(f'\r{date_str}...    ')
@@ -262,6 +263,8 @@ def show_map(target_cases: float):
     data = data[data['Country/Region'].isin(['US'])]
 
     # Calculate days until the target for each state.
+    estimated_target_cases_day = int(curve.cases_to_day(target_cases))
+
     state_to_data: Dict[str, pd.DataFrame] = {}
     state_to_days_until: Dict[str, int] = {}
     for _, state_geo in usa.iterrows():
@@ -274,7 +277,7 @@ def show_map(target_cases: float):
         cur_cases = int(state_data.iloc[-1]['Confirmed'])
 
         estimated_cur_day = int(curve.cases_to_day(cur_cases))
-        estimated_target_cases_day = int(curve.cases_to_day(target_cases))
+        estimated_cur_day = max(0, estimated_cur_day) # Don't let it get < 0 or else it throws ranges off.
         
         state_to_data[state_geo.STATE_NAME] = state_data
         state_to_days_until[state_geo.STATE_NAME] = estimated_target_cases_day - estimated_cur_day
@@ -286,7 +289,7 @@ def show_map(target_cases: float):
     days_until_min = min(state_to_days_until.values())
     days_until_max = max(state_to_days_until.values())
 
-    cmap = plt.get_cmap('autumn') # 0-255 maps to red->orange
+    cmap = plt.get_cmap('jet') # 0-255 maps to red->orange
 
     # Draw stuff on each state.
     for _, state_geo in usa.iterrows():
@@ -297,14 +300,20 @@ def show_map(target_cases: float):
 
         # Figure out a text color.
         t = (days_until - days_until_min) / (days_until_max - days_until_min)
-        color = cmap(t * 255)
+        color = cmap(255 - int(t * 255))
 
         pt = state_geo.geometry.representative_point()
-        txt = plt.text(pt.x, pt.y, f'{state_geo.STATE_ABBR}\ncases: {cur_cases}\ndays until: {days_until}', horizontalalignment='center', color=color)
+        txt = plt.text(
+            pt.x,
+            pt.y,
+            f'{state_geo.STATE_ABBR}\ncases: {cur_cases}\nT-{days_until} days',
+            horizontalalignment='center',
+            color=color,
+            weight='bold')
         txt.set_path_effects([PathEffects.withStroke(linewidth=2, foreground='black')])
 
-
-    plt.title(f'Days until {int(target_cases)} cases')
+    highest_date = data[FILE_DATE_KEY].max()
+    plt.title(f'From {highest_date}, days until {int(target_cases):,} cases')
     plt.show()
 
 
