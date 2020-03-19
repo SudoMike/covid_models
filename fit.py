@@ -283,6 +283,11 @@ def show_map(target_cases: float):
     # Draw the whole map.
     usa.plot()
 
+    days_until_min = min(state_to_days_until.values())
+    days_until_max = max(state_to_days_until.values())
+
+    cmap = plt.get_cmap('autumn') # 0-255 maps to red->orange
+
     # Draw stuff on each state.
     for _, state_geo in usa.iterrows():
         # Get confirmed cases by day
@@ -290,8 +295,12 @@ def show_map(target_cases: float):
         cur_cases = int(state_data.iloc[-1]['Confirmed'])
         days_until = state_to_days_until[state_geo.STATE_NAME]
 
+        # Figure out a text color.
+        t = (days_until - days_until_min) / (days_until_max - days_until_min)
+        color = cmap(t * 255)
+
         pt = state_geo.geometry.representative_point()
-        txt = plt.text(pt.x, pt.y, f'{state_geo.STATE_ABBR}\ncases: {cur_cases}\ndays until: {days_until}', horizontalalignment='center', color='w')
+        txt = plt.text(pt.x, pt.y, f'{state_geo.STATE_ABBR}\ncases: {cur_cases}\ndays until: {days_until}', horizontalalignment='center', color=color)
         txt.set_path_effects([PathEffects.withStroke(linewidth=2, foreground='black')])
 
 
