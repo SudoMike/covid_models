@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pickle
+from scipy.interpolate import InterpolatedUnivariateSpline
 import requests
 
 
@@ -76,8 +77,45 @@ def fetch():
         pickle.dump(data, f)
 
 
+
+def ensure_strictly_increasing(x: np.array, min_increment: float=0.01) -> np.array:
+    '''
+    Ensure that the input is strictly increasing.
+
+    Args:
+        x: The array to ensure is strictly increasing. This function will raise an exception
+            if any value is LESS than the previous value. If it's equal to the previous value,
+            that's fine, and it will add min_increment.
+
+        min_increment: The minimum difference between consecutive values.
+
+    Return:
+        An array of the same (1-D) shape as x, but with values strictly increasing.
+    '''
+    assert len(x.shape) == 1 # must be 1-D
+
+    ret = np.zeros(len(x))
+    prev_val_truth = None
+    for i, val in enumerate(x):
+        if i == 0:
+            ret[i] = val
+        else:
+            diff = val - prev_val_truth
+            assert diff >= 0
+
+            if diff == 0:
+                ret[i] = prev_val_modified + min_increment
+            else:
+                ret[i] = val
+
+        prev_val_modified = ret[i]
+        prev_val_truth = val
+
+    return ret
+
+
 class ReferenceCurve:
-    def __init__(self, data: pd.DataFrame):
+    def __init__(self, data: pd.DataFrame, use_spline: bool = False):
         '''
         '''
         # Filter to the country we're gonna use to build our model.
@@ -100,17 +138,23 @@ class ReferenceCurve:
         x = np.array(range(0, num_days))
         y = np.array(confirmed)
 
-        # We're modeling this as an exponential, so we're gonna fit a line to log(y).
-        model = np.polyfit(x, np.log(y), 1)
-        self.estimation_func = lambda day_offset: np.exp(day_offset * model[0] + model[1])
+        if use_spline:
+            self.spline = InterpolatedUnivariateSpline(x, y)
+            self.spline_inverse = InterpolatedUnivariateSpline(ensure_strictly_increasing(y), x, k=1)
+        else:
+            # We're modeling this as an exponential, so we're gonna fit a line to log(y).
+            model = np.polyfit(x, np.log(y), 1)
+            self.estimation_func = lambda day_offset: np.exp(day_offset * model[0] + model[1])
 
-        # Scale the estimation.
-        self.scale = confirmed.iloc[-1] / self.estimation_func(x[-1])
+            # Scale the estimation.
+            self.scale = confirmed.iloc[-1] / self.estimation_func(x[-1])
+            self.model = model
+
+        self.use_spline = use_spline
+        self.first_day = first_day
         self.country = country
         self.x = x
         self.y = y
-        self.model = model
-        self.first_day = first_day
 
     def estimate_confirmed_cases(self, day_offset: float) -> float:
         '''
@@ -123,7 +167,10 @@ class ReferenceCurve:
             Estimate of the number of confirmed cases. The curve is rescaled so it touches the
             last data sample.
         '''
-        return self.estimation_func(day_offset) * self.scale
+        if self.use_spline:
+            return self.spline(day_offset)
+        else:
+            return self.estimation_func(day_offset) * self.scale
 
     def estimate_confirmed_cases_no_scale(self, day_offset: float) -> float:
         '''
@@ -134,7 +181,10 @@ class ReferenceCurve:
             Estimate of the number of confirmed cases. In this case, the curve is not rescaled
             to touch the last data sample.
         '''
-        return self.estimation_func(day_offset)
+        if self.use_spline:
+            return self.spline(day_offset)
+        else:
+            return self.estimation_func(day_offset)
 
     def cases_to_day(self, cases: float) -> float:
         '''
@@ -148,15 +198,21 @@ class ReferenceCurve:
             if `cases` == the number of cases on the last day of the dataset, this would
             return the number of the last day.
         '''
-        inverted = (cases / self.scale)
-        inverted = np.log(inverted)
-        inverted = (inverted - self.model[1]) / self.model[0]
-        return inverted
+        if self.use_spline:
+            return self.spline_inverse(cases)
+        else:
+            # Invert the exponential we would've used to generate the # of cases.
+            inverted = (cases / self.scale)
+            inverted = np.log(inverted)
+            inverted = (inverted - self.model[1]) / self.model[0]
+            return inverted
 
 
 
 @cli.command()
-def show_reference_curve():
+@click.option('--use_spline/--no_use_spline', is_flag=True, default=True,
+    help='Interpolate with a spline if True, otherwise an exponential.', show_default=True)
+def show_reference_curve(use_spline: bool):
     '''
     Display the confirmed cases curve and an estimate using an exponential.
     '''
@@ -164,7 +220,7 @@ def show_reference_curve():
     with open(DATA_FILENAME, 'rb') as f:
         data: pd.DataFrame = pickle.load(f)
 
-    curve = ReferenceCurve(data)
+    curve = ReferenceCurve(data, use_spline=use_spline)
 
     df = curve.country
 
@@ -191,7 +247,7 @@ def show_map(target_cases: float):
         data: pd.DataFrame = pickle.load(f)
 
     # Setup the reference curve.
-    curve = ReferenceCurve(data)
+    curve = ReferenceCurve(data, use_spline=True)
 
     # Load the geo data.
     with tempfile.TemporaryDirectory() as tempdir:
@@ -205,10 +261,9 @@ def show_map(target_cases: float):
     # Restrict to US data, and confirmed cases only.
     data = data[data['Country/Region'].isin(['US'])]
 
-    # Draw the whole map.
-    usa.plot()
-
-    # Draw stuff on each state.
+    # Calculate days until the target for each state.
+    state_to_data: Dict[str, pd.DataFrame] = {}
+    state_to_days_until: Dict[str, int] = {}
     for _, state_geo in usa.iterrows():
         # Get confirmed cases by day
         state_data = data[data['Province/State'] == state_geo.STATE_NAME]
@@ -216,12 +271,24 @@ def show_map(target_cases: float):
         state_data = state_data.groupby(FILE_DATE_KEY).sum()
         state_data.reset_index(level=0, inplace=True) # Convert the index (of the date) to a column.
 
-        #import pudb;pudb.set_trace()
         cur_cases = int(state_data.iloc[-1]['Confirmed'])
 
         estimated_cur_day = int(curve.cases_to_day(cur_cases))
         estimated_target_cases_day = int(curve.cases_to_day(target_cases))
-        days_until = estimated_target_cases_day - estimated_cur_day
+        
+        state_to_data[state_geo.STATE_NAME] = state_data
+        state_to_days_until[state_geo.STATE_NAME] = estimated_target_cases_day - estimated_cur_day
+
+
+    # Draw the whole map.
+    usa.plot()
+
+    # Draw stuff on each state.
+    for _, state_geo in usa.iterrows():
+        # Get confirmed cases by day
+        state_data = state_to_data[state_geo.STATE_NAME]
+        cur_cases = int(state_data.iloc[-1]['Confirmed'])
+        days_until = state_to_days_until[state_geo.STATE_NAME]
 
         pt = state_geo.geometry.representative_point()
         txt = plt.text(pt.x, pt.y, f'{state_geo.STATE_ABBR}\ncases: {cur_cases}\ndays until: {days_until}', horizontalalignment='center', color='w')
