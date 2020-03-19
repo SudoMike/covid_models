@@ -19,6 +19,8 @@ import pandas as pd
 import pickle
 from scipy.interpolate import InterpolatedUnivariateSpline
 import requests
+from tabulate import tabulate
+
 
 
 DATA_FILENAME = 'data.pickle'
@@ -233,7 +235,11 @@ def show_reference_curve(use_spline: bool):
 @click.option('--target_cases', default=20000, type=float,
               help='The number of cases to calculate # of days until.',
               show_default=True)
-def show_map(target_cases: float):
+@click.option('--show_map/--no_show_map', is_flag=True, default=True,
+    help='Render a map. Otherwise, just print a table.', show_default=True)
+@click.option('--country', default='US', 
+    help='The country to show info for. If not US, then you should use --no_show_map', show_default=True)
+def show_map(target_cases: float, show_map: bool, country: str):
     '''
     Show a map of the US with T-XXX (to N cases) shown on the states.
     '''
@@ -249,27 +255,45 @@ def show_map(target_cases: float):
     usa = usa[~usa.STATE_ABBR.isin(['AK', 'HI'])]
 
     # Restrict to US data, and confirmed cases only.
-    data = data[data['Country/Region'].isin(['US'])]
+    data = data[data['Country/Region'] == country]
 
     # Calculate days until the target for each state.
     estimated_target_cases_day = int(curve.cases_to_day(target_cases))
 
+    data['Province/State'] = data['Province/State'].fillna('ALL')
+    if show_map:
+        state_names = [x.STATE_NAME for _, x in usa.iterrows()]
+    else:
+        state_names = data['Province/State'].unique()
+
     state_to_data: Dict[str, pd.DataFrame] = {}
     state_to_days_until: Dict[str, int] = {}
-    for _, state_geo in usa.iterrows():
+    for state_name in state_names:
         # Get confirmed cases by day
-        state_data = data[data['Province/State'] == state_geo.STATE_NAME]
+        state_data = data[data['Province/State'] == state_name]
         state_data = state_data[['Confirmed', FILE_DATE_KEY]].sort_values(by=[FILE_DATE_KEY])
         state_data = state_data.groupby(FILE_DATE_KEY).sum()
         state_data.reset_index(level=0, inplace=True) # Convert the index (of the date) to a column.
+
+        if len(state_data) == 0:
+            continue
 
         cur_cases = int(state_data.iloc[-1]['Confirmed'])
 
         estimated_cur_day = int(curve.cases_to_day(cur_cases))
         estimated_cur_day = max(0, estimated_cur_day) # Don't let it get < 0 or else it throws ranges off.
         
-        state_to_data[state_geo.STATE_NAME] = state_data
-        state_to_days_until[state_geo.STATE_NAME] = estimated_target_cases_day - estimated_cur_day
+        state_to_data[state_name] = state_data
+        state_to_days_until[state_name] = estimated_target_cases_day - estimated_cur_day
+
+    # If not show
+    if not show_map:
+        table = [['State', 'Current confirmed', f'Days until {int(target_cases)} cases']]
+        for state in sorted(state_to_days_until.keys()):
+            table.append([state, state_to_data[state].iloc[-1]['Confirmed'], state_to_days_until[state]])
+
+        print(tabulate(table[1:], headers=table[0]))
+        return
 
     # Set the 'days_until' column.
     usa['days_until'] = usa['STATE_NAME'].map(lambda x: state_to_days_until[x])
