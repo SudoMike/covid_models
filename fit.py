@@ -339,6 +339,58 @@ def show_map(target_cases: float, show_map: bool, country: str):
 
 
 
+@cli.command()
+def list_countries():
+    '''
+    Print a list of the countries.
+    '''
+    with open(DATA_FILENAME, 'rb') as f:
+        data: pd.DataFrame = pickle.load(f)
+
+    for country in sorted(data['Country/Region'].unique()):
+        print(country)
+
+
+
+@cli.command()
+@click.option('--countries', required=True,
+    help='A comma-separated list of countries to include in the plot.', show_default=True)
+@click.option('--log_scale/--no_log_scale', is_flag=True, default=False,
+    help='Use a log scale.', show_default=True)
+def plot_some_countries(countries: str, log_scale: bool):
+    '''
+    Plot the curves for some countries.
+    '''
+    with open(DATA_FILENAME, 'rb') as f:
+        data: pd.DataFrame = pickle.load(f)
+
+    data = data[[FILE_DATE_KEY, 'Country/Region', 'Confirmed']]
+
+    fig, ax = plt.subplots()
+
+    countries_list = countries.replace(',,', ',').split(',')
+    for country_name in data['Country/Region'].unique():
+        if country_name not in countries_list:
+            continue
+
+        country = data[data['Country/Region'] == country_name]
+        country = country.groupby(FILE_DATE_KEY).sum()
+
+        country = country.rename(columns={'Confirmed': country_name})
+        country.plot(ax=ax, logy=log_scale)
+
+    plt.xlabel('date')
+    if log_scale:
+        plt.ylabel('confirmed cases (log scale)')
+        plt.title('confirmed cases, log scale')
+    else:
+        plt.ylabel('confirmed cases')
+        plt.title('confirmed cases')
+    
+    plt.show()
+
+
 # CLI boilerplate
 if __name__ == '__main__':
     cli()
+
