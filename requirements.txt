@@ -11,7 +11,7 @@ descartes==1.1.0
 Fiona==1.8.13.post1
 geopandas==0.7.0
 idna==2.9
-ipython==7.13.0
+ipython==7.16.3
 ipython-genutils==0.2.0
 jedi==0.16.0
 kiwisolver==1.1.0
